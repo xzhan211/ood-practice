@@ -16,95 +16,157 @@ import java.util.*;
 
 public class ParkingLot{
     public static void main(String[] args){
-        ParkingLot parkingLot = new ParkingLot(3);
-        Car car1 = new Car("xxx123");
-        Car car2 = new Car("xxx456");
-        Car car3 = new Car("xxx789");
-        Car car4 = new Car("yyy123");
+        ParkingLot parkingLot = new ParkingLot(7);
+
+        Vehicle car1 = new Vehicle("xxx123", VehicleType.CAR);
+        Vehicle car2 = new Vehicle("xxx456", VehicleType.TRUCK);
+        Vehicle car3 = new Vehicle("xxx789", VehicleType.BUS);
+
         ParkingTicket ticket1 = parkingLot.park(car1);
-        System.out.println(car1);
         System.out.println(ticket1);
-        System.out.println(parkingLot.getAvailableSlots());
+        ParkingTicket ticket2 = parkingLot.park(car2);
+        System.out.println(ticket2);
+        ParkingTicket ticket3 = parkingLot.park(car3);
+        System.out.println(ticket3);
+        System.out.println(parkingLot.getAvailableUnits());
         System.out.println(parkingLot.getCapacity());
     }
 
     private final int capacity;
-    private final Map<Integer, Car> slots = new HashMap<>();
-    private final Deque<Integer> freeSlots = new ArrayDeque<>();
+    private final Vehicle[] slotToVehicle;
     private final Set<String> parkedPlates = new HashSet<>();
 
     public ParkingLot(int capacity) {
         if(capacity <= 0) throw new IllegalArgumentException("capacity must be > 0");
         this.capacity = capacity;
-        for (int i=1; i<=capacity; i++) freeSlots.addLast(i);
+        this.slotToVehicle = new Vehicle[capacity + 1];
     }
 
-    public ParkingTicket park(Car car) {
-        Objects.requireNonNull(car, "car");
-        if(parkedPlates.contains(car.getLicensePlate())) {
-            throw new IllegalStateException("Car already parked: " + car.getLicensePlate());
+    public ParkingTicket park(Vehicle vehicle) {
+        Objects.requireNonNull(vehicle, "vehicle");
+        if(parkedPlates.contains(vehicle.getLicensePlate())) {
+            throw new IllegalStateException("Vehicle already parked: " + vehicle.getLicensePlate());
         }
-        Integer slot = freeSlots.pollFirst();
-        if(slot == null) throw new IllegalStateException("Parking lot is full");
-        slots.put(slot, car);
-        parkedPlates.add(car.getLicensePlate());
-        return new ParkingTicket(slot, car.getLicensePlate());
+
+        int needed = vehicle.getType().getSizeUnits();
+        List<Integer> block = findContiguousFreeBlock(needed);
+        if(block == null) {
+            throw new IllegalStateException("No contiguous block of size " + needed + " available");
+        }
+
+        for(int idx : block) slotToVehicle[idx] = vehicle;
+        parkedPlates.add(vehicle.getLicensePlate());
+        return new ParkingTicket(block, vehicle.getLicensePlate());
     }
 
-    public Car unpark(ParkingTicket ticket) {
+    public Vehicle unpark(ParkingTicket ticket) {
         Objects.requireNonNull(ticket, "ticket");
-        Car car = slots.get(ticket.getSlot());
-        if(car == null) {
-            throw new IllegalArgumentException("Invalid or already used ticket (empty slot)");
+        List<Integer> slots = ticket.getSlots();
+        Vehicle v = null;
+        for(int idx : slots) {
+            Vehicle at = getAt(idx);
+            if(at == null) throw new IllegalArgumentException("Invalid/used ticket: empty slot " + idx);
+            if(v == null) v = at;
+            if(at != v) throw new IllegalArgumentException("Ticket spans different vehicles");
         }
-        if(!car.getLicensePlate().equals(ticket.getLicensePlate())) {
-            throw new IllegalArgumentException("Ticket does not match parked car");
-        }
-        slots.remove(ticket.getSlot());
-        parkedPlates.remove(car.getLicensePlate());
-        freeSlots.addLast(ticket.getSlot());
-        return car;
-    }
 
-    public int getAvailableSlots() {
-        return freeSlots.size();
+        if(!v.getLicensePlate().equals(ticket.getLicensePlate())) {
+            throw new IllegalArgumentException("Ticket plate mismatch");
+        }
+
+        for (int idx : slots) slotToVehicle[idx] = null;
+        parkedPlates.remove(v.getLicensePlate());
+        return v;
     }
 
     public int getCapacity() {
         return capacity;
     }
-}
 
-class Car {
-    private final String licensePlate;
-    public Car (String licensePlate) {
-        if(licensePlate == null || licensePlate.isBlank()){
-            throw new IllegalArgumentException("licensePlate is required");
+    public int getAvailableUnits() {
+        int free = 0;
+        for(int i=1; i<=capacity; i++) {
+            if(slotToVehicle[i] == null) free++;
         }
-        this.licensePlate = licensePlate;
+        return free;
     }
 
-    public String getLicensePlate(){
+
+    private Vehicle getAt(int idx) {
+        if(idx < 1 || idx > capacity) return null;
+        return slotToVehicle[idx];
+    }
+
+    private List<Integer> findContiguousFreeBlock(int size) {
+        int run = 0;
+        for(int i=1; i<=capacity; i++) {
+            if(slotToVehicle[i] == null) {
+                run++;
+                if(run == size) {
+                    int start = i - size + 1;
+                    List<Integer> block = new ArrayList<>(size);
+                    for(int s=start; s<=i; s++) {
+                        block.add(s);
+                    }
+                    return block;
+                }
+            } else {
+                run = 0;
+            }
+        }
+        return null;
+    }
+}
+
+
+enum VehicleType {
+    MOTORCYCLE(1),
+    CAR(1),
+    TRUCK(1),
+    BUS(5);
+
+    private final int sizeUnits;
+    VehicleType(int sizeUnits) {
+        this.sizeUnits = sizeUnits;
+    }
+
+    public int getSizeUnits() {
+        return sizeUnits;
+    }
+}
+
+final class Vehicle {
+    private final String licensePlate;
+    private final VehicleType type;
+
+    public Vehicle(String licensePlate, VehicleType type) {
+        if(licensePlate == null || licensePlate.isBlank()) {
+            throw new IllegalArgumentException("licensePlate is required");
+        }
+        Objects.requireNonNull(type, "type");
+        this.licensePlate = licensePlate;
+        this.type = type;
+    }
+
+    public String getLicensePlate() {
         return licensePlate;
     }
 
-    @Override
-    public String toString() {
-        return ">> Car : " + licensePlate;
+    public VehicleType getType() {
+        return type;
     }
-
 }
 
 class ParkingTicket{
-    private final int slot;
+    private final List<Integer> slots;
     private final String licensePlate;
-    ParkingTicket(int slot, String licensePlate) {
-        this.slot = slot;
+    ParkingTicket(List<Integer> slots, String licensePlate) {
+        this.slots = List.copyOf(slots);
         this.licensePlate = licensePlate;
     }
 
-    public int getSlot() {
-        return slot;
+    public List<Integer> getSlots() {
+        return slots;
     }
 
     public String getLicensePlate() {
@@ -113,7 +175,7 @@ class ParkingTicket{
 
     @Override
     public String toString() {
-        return ">> slot: " + slot + " --- licensePlate: " + licensePlate;
+        return ">> slot: " + slots.toString() + " --- licensePlate: " + licensePlate;
     }
 
 }
