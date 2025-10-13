@@ -1,4 +1,8 @@
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
 
 /*
  * r1: park & unpark
@@ -41,62 +45,80 @@ public class ParkingLot{
         final int index;
         final Vehicle[] slots;
         final int capacity;
+        private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+
         Floor(int index, int capacity) {
             this.index = index;
             this.slots = new Vehicle[capacity + 1];
             this.capacity = capacity;
         }
 
-        List<Integer> findContiguousFreeBlock(int size) {
-            int run = 0;
-            for(int i=1; i<slots.length; i++) {
-                if(slots[i] == null) {
-                    run++;
-                    if(run == size) {
-                        int start = i - size + 1;
-                        List<Integer> block = new ArrayList<>(size);
-                        for(int s=start; s<=i; s++) {
-                            block.add(s);
+        List<Integer> allocateFirstFit(int size) {
+            final WriteLock w = lock.writeLock();
+            w.lock();
+            try {
+                int run = 0;
+                for(int i=1; i<slots.length; i++) {
+                    if(slots[i] == null) {
+                        run++;
+                        if(run == size) {
+                            int start = i - size + 1;
+                            List<Integer> block = new ArrayList<>(size);
+                            for(int s=start; s<=i; s++) {
+                                block.add(s);
+                            }
+                            return block;
                         }
-                        return block;
+                    }else{
+                        run = 0;
                     }
-                }else{
-                    run = 0;
                 }
+                return null;
+            } finally {
+                w.unlock();
             }
-            return null;
         }
 
-        List<Integer> findNearestContiguousFreeBlock(int size, int preferredPosition) {
+        List<Integer> allocateNearest(int size, int preferredPosition, Vehicle v) {
             if(preferredPosition < 1 || preferredPosition >= slots.length) { throw new IllegalArgumentException("preferredPosition out of range" ); }
-            int bestDist = Integer.MAX_VALUE;
-            int bestStart = -1;
+            final var w = lock.writeLock();
+            w.lock();
+            
+            try {
+                int bestDist = Integer.MAX_VALUE;
+                int bestStart = -1;
 
-            int i = 1;
-            while(i < slots.length) {
-                while(i < slots.length && slots[i] != null) i++;
-                if(i >= slots.length) break;
+                int i = 1;
+                while(i < slots.length) {
+                    while(i < slots.length && slots[i] != null) i++;
+                    if(i >= slots.length) break;
 
-                int start = i;
-                while(i < slots.length && slots[i] == null) i++;
-                int end = i - 1;
+                    int start = i;
+                    while(i < slots.length && slots[i] == null) i++;
+                    int end = i - 1;
 
-                int runLen = end - start + 1;
-                if(runLen >= size) {
-                    int lastStart = end - size + 1;
-                    for(int s=start; s <= lastStart; s++) {
-                        int dist = Math.abs(s - preferredPosition);
-                        if(dist < bestDist) {
-                            bestDist = dist;
-                            bestStart = s;
+                    int runLen = end - start + 1;
+                    if(runLen >= size) {
+                        int lastStart = end - size + 1;
+                        for(int s=start; s <= lastStart; s++) {
+                            int dist = Math.abs(s - preferredPosition);
+                            if(dist < bestDist) {
+                                bestDist = dist;
+                                bestStart = s;
+                            }
                         }
                     }
                 }
+                if (bestStart == -1) return null;
+                List<Integer> block = new ArrayList<>(size);
+                for(int s = bestStart; s < bestStart + size; s++) {
+                    slots[s] = v; // occupy
+                    block.add(s);
+                }
+                return block;
+            } finally {
+                w.unlock();
             }
-            if (bestStart == -1) return null;
-            List<Integer> block = new ArrayList<>(size);
-            for(int s = bestStart; s < bestStart + size; s++) block.add(s);
-            return block;
         }
 
 
@@ -105,19 +127,26 @@ public class ParkingLot{
         }
 
         Vehicle release(ParkingTicket ticket) {
-            List<Integer> block = ticket.getSlots();
-            Vehicle v = null;
-            for(int idx : block) {
-                Vehicle at = getAt(idx);
-                if (at == null) throw new IllegalArgumentException("Invalid/used ticket: empty slot " + idx + " on floor " + index);
-                if (v == null) v = at;
-                if (at != v) throw new IllegalArgumentException("Ticket spans different vehicles on floor " + index);
+            final var w = lock.writeLock();
+            w.lock();
+
+            try{
+                List<Integer> block = ticket.getSlots();
+                Vehicle v = null;
+                for(int idx : block) {
+                    Vehicle at = getAt(idx);
+                    if (at == null) throw new IllegalArgumentException("Invalid/used ticket: empty slot " + idx + " on floor " + index);
+                    if (v == null) v = at;
+                    if (at != v) throw new IllegalArgumentException("Ticket spans different vehicles on floor " + index);
+                }
+                if(!v.getLicensePlate().equals(ticket.getLicensePlate())) {
+                    throw new IllegalArgumentException("Ticket plate mismatch");
+                }
+                for(int idx : block) slots[idx] = null;
+                return v;
+            } finally {
+                w.unlock();
             }
-            if(!v.getLicensePlate().equals(ticket.getLicensePlate())) {
-                throw new IllegalArgumentException("Ticket plate mismatch");
-            }
-            for(int idx : block) slots[idx] = null;
-            return v;
         }
 
         Vehicle getAt(int idx) {
@@ -130,16 +159,23 @@ public class ParkingLot{
         }
 
         public int getAvailableUnits() {
-            int free = 0;
-            for(int i=1; i<=capacity; i++) {
-                if(slots[i] == null) free++;
+            final ReadLock r = lock.readLock();
+            r.lock();
+            try {
+                int free = 0;
+                for(int i=1; i<=capacity; i++) {
+                    if(slots[i] == null) free++;
+                }
+                return free;
+            } finally {
+                r.unlock();
             }
-            return free;
         }
     }
 
     private final List<Floor> floors;
-    private final Set<String> parkedPlates = new HashSet<>();
+    // Prevent duplicate parking across threads
+    private final Set<String> parkedPlates = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final List<Gate> gates;
 
     public ParkingLot(int[] capacities, List<Gate> gates) {
@@ -158,59 +194,89 @@ public class ParkingLot{
         }
     }
 
+    /** First-fit across floors, thread-safe. */
     public ParkingTicket park(Vehicle vehicle) {
         Objects.requireNonNull(vehicle, "vehicle");
-        if(parkedPlates.contains(vehicle.getLicensePlate())) {
-            throw new IllegalStateException("Vehicle already parked: " + vehicle.getLicensePlate());
+        final String plate = vehicle.getLicensePlate();
+
+        // Reserve plate globally to block duplicates.
+        if (!parkedPlates.add(plate)) {
+            throw new IllegalStateException("Vehicle already parked: " + plate);
         }
 
         int needed = vehicle.getType().getSizeUnits();
-
-        for(Floor f : floors) {
-            List<Integer> block = f.findContiguousFreeBlock(needed);
-            if(block != null){
-                f.occupy(block, vehicle);
-                parkedPlates.add(vehicle.getLicensePlate());
-                return new ParkingTicket(f.index, block, vehicle.getLicensePlate());
+        try {
+            for (Floor f : floors) {
+                List<Integer> block = f.allocateFirstFit(needed);
+                if (block != null) {
+                    return new ParkingTicket(f.index, block, plate);
+                }
             }
+        } catch (RuntimeException e) {
+            // In case of any unexpected error during allocation,
+            // unreserve the plate before bubbling up.
+            parkedPlates.remove(plate);
+            throw e;
         }
+
+        // No space anywhere → undo reservation
+        parkedPlates.remove(plate);
         throw new IllegalStateException("No contiguous block of size " + needed + " available on any floor");
     }
 
     public ParkingTicket parkNearEntrance(Vehicle vehicle, Gate entrance) {
         Objects.requireNonNull(vehicle, "vehicle");
         Objects.requireNonNull(entrance, "entrance");
-        if(parkedPlates.contains(vehicle.getLicensePlate())) {
-            throw new IllegalStateException("Vehicle already parked: " + vehicle.getLicensePlate());
+        final String plate = vehicle.getLicensePlate();
+
+        if (!parkedPlates.add(plate)) {
+            throw new IllegalStateException("Vehicle already parked: " + plate);
         }
+
         int fi = entrance.getFloorIndex();
-        if(fi < 0 || fi >= floors.size()) throw new IllegalArgumentException("Invalid entrance floor");
+        if (fi < 0 || fi >= floors.size()) {
+            parkedPlates.remove(plate);
+            throw new IllegalArgumentException("Invalid entrance floor");
+        }
+        int needed = vehicle.getType().getSizeUnits();
         Floor f = floors.get(fi);
 
-        int needed = vehicle.getType().getSizeUnits();
-        List<Integer> block = f.findNearestContiguousFreeBlock(needed, entrance.getPosition());
-        if (block == null) {
-            throw new IllegalStateException("No suitable block near entrance on floor ");
+        try {
+            List<Integer> block = f.allocateNearest(needed, entrance.getPosition(), vehicle);
+            if (block == null) {
+                parkedPlates.remove(plate);
+                throw new IllegalStateException("No suitable block near entrance on floor " + fi);
+            }
+            return new ParkingTicket(fi, block, plate);
+        } catch (RuntimeException e) {
+            parkedPlates.remove(plate);
+            throw e;
         }
-        f.occupy(block, vehicle);
-        parkedPlates.add(vehicle.getLicensePlate());
-        return new ParkingTicket(fi, block, vehicle.getLicensePlate());
     }
 
+    /** Thread-safe unpark. */
     public Vehicle unpark(ParkingTicket ticket) {
         Objects.requireNonNull(ticket, "ticket");
-        if(ticket.getFloor() < 0 || ticket.getFloor() >= floors.size()) {
-            throw new IllegalArgumentException("Invalid floor in ticket");
-        }
-        Floor f = floors.get(ticket.getFloor());
-        Vehicle v = f.release(ticket);
+        int fi = ticket.getFloor();
+        if (fi < 0 || fi >= floors.size()) throw new IllegalArgumentException("Invalid floor in ticket");
+        
+        Floor f = floors.get(fi);
+        Vehicle v = f.release(ticket); // atomic per-floor
+        // After the floor is updated, remove plate so it can be parked again.
         parkedPlates.remove(v.getLicensePlate());
         return v;
     }
 
-    public int floorsCount() {
-        return floors.size();
+    public int floorsCount() { return floors.size(); }
+
+    public int totalAvailableUnits() {
+        int sum = 0;
+        for (Floor f : floors) sum += f.getAvailableUnits();
+        return sum;
     }
+
+    public int availableUnitsOnFloor(int floorIndex) { return floors.get(floorIndex).getAvailableUnits(); }
+    public List<Gate> listGates() { return gates; }
 
     public void displayAvailableUnits(){
         for(int i=0; i<floors.size(); i++) {
