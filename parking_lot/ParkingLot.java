@@ -16,7 +16,8 @@ import java.util.*;
 
 public class ParkingLot{
     public static void main(String[] args){
-        ParkingLot parkingLot = new ParkingLot(7);
+        int[] capacities = {5,10};
+        ParkingLot parkingLot = new ParkingLot(capacities);
 
         Vehicle car1 = new Vehicle("xxx123", VehicleType.CAR);
         Vehicle car2 = new Vehicle("xxx456", VehicleType.TRUCK);
@@ -26,20 +27,91 @@ public class ParkingLot{
         System.out.println(ticket1);
         ParkingTicket ticket2 = parkingLot.park(car2);
         System.out.println(ticket2);
-        ParkingTicket ticket3 = parkingLot.park(car3);
-        System.out.println(ticket3);
-        System.out.println(parkingLot.getAvailableUnits());
-        System.out.println(parkingLot.getCapacity());
+        // ParkingTicket ticket3 = parkingLot.park(car3);
+        // System.out.println(ticket3);
+        parkingLot.displayAvailableUnits();
     }
 
-    private final int capacity;
-    private final Vehicle[] slotToVehicle;
+
+    private static final class Floor {
+        final int index;
+        final Vehicle[] slots;
+        final int capacity;
+        Floor(int index, int capacity) {
+            this.index = index;
+            this.slots = new Vehicle[capacity + 1];
+            this.capacity = capacity;
+        }
+
+        List<Integer> findContiguousFreeBlock(int size) {
+            int run = 0;
+            for(int i=1; i<slots.length; i++) {
+                if(slots[i] == null) {
+                    run++;
+                    if(run == size) {
+                        int start = i - size + 1;
+                        List<Integer> block = new ArrayList<>(size);
+                        for(int s=start; s<=i; s++) {
+                            block.add(s);
+                        }
+                        return block;
+                    }
+                }else{
+                    run = 0;
+                }
+            }
+            return null;
+        }
+
+        void occupy (List<Integer> block, Vehicle v) {
+            for(int idx : block) slots[idx] = v;
+        }
+
+        Vehicle release(ParkingTicket ticket) {
+            List<Integer> block = ticket.getSlots();
+            Vehicle v = null;
+            for(int idx : block) {
+                Vehicle at = getAt(idx);
+                if (at == null) throw new IllegalArgumentException("Invalid/used ticket: empty slot " + idx + " on floor " + index);
+                if (v == null) v = at;
+                if (at != v) throw new IllegalArgumentException("Ticket plate mismatch");
+            }
+            if(!v.getLicensePlate().equals(ticket.getLicensePlate())) {
+                throw new IllegalArgumentException("Ticket plate mismatch");
+            }
+            for(int idx : block) slots[idx] = null;
+            return v;
+        }
+
+        Vehicle getAt(int idx) {
+            if(idx < 1 || idx >= slots.length) return null;
+            return slots[idx];
+        }
+
+        public int getCapacity() {
+            return capacity;
+        }
+
+        public int getAvailableUnits() {
+            int free = 0;
+            for(int i=1; i<=capacity; i++) {
+                if(slots[i] == null) free++;
+            }
+            return free;
+        }
+    }
+
+    private final List<Floor> floors;
     private final Set<String> parkedPlates = new HashSet<>();
 
-    public ParkingLot(int capacity) {
-        if(capacity <= 0) throw new IllegalArgumentException("capacity must be > 0");
-        this.capacity = capacity;
-        this.slotToVehicle = new Vehicle[capacity + 1];
+    public ParkingLot(int[] capacities) {
+        if(capacities == null || capacities.length == 0) throw new IllegalArgumentException("at least one floor");
+        floors = new ArrayList<>(capacities.length);
+        for(int i=0; i<capacities.length; i++) {
+            int cap = capacities[i];
+            if(cap <= 0) throw new IllegalArgumentException("capacity must be > 0 of for floor " + i);
+            floors.add(new Floor(i, cap));
+        }
     }
 
     public ParkingTicket park(Vehicle vehicle) {
@@ -49,72 +121,37 @@ public class ParkingLot{
         }
 
         int needed = vehicle.getType().getSizeUnits();
-        List<Integer> block = findContiguousFreeBlock(needed);
-        if(block == null) {
-            throw new IllegalStateException("No contiguous block of size " + needed + " available");
-        }
 
-        for(int idx : block) slotToVehicle[idx] = vehicle;
-        parkedPlates.add(vehicle.getLicensePlate());
-        return new ParkingTicket(block, vehicle.getLicensePlate());
+        for(Floor f : floors) {
+            List<Integer> block = f.findContiguousFreeBlock(needed);
+            if(block != null){
+                f.occupy(block, vehicle);
+                parkedPlates.add(vehicle.getLicensePlate());
+                return new ParkingTicket(f.index, block, vehicle.getLicensePlate());
+            }
+        }
+        throw new IllegalStateException("No contiguous block of size " + needed + " available on any floor");
     }
 
     public Vehicle unpark(ParkingTicket ticket) {
         Objects.requireNonNull(ticket, "ticket");
-        List<Integer> slots = ticket.getSlots();
-        Vehicle v = null;
-        for(int idx : slots) {
-            Vehicle at = getAt(idx);
-            if(at == null) throw new IllegalArgumentException("Invalid/used ticket: empty slot " + idx);
-            if(v == null) v = at;
-            if(at != v) throw new IllegalArgumentException("Ticket spans different vehicles");
+        if(ticket.getFloor() < 0 || ticket.getFloor() >= floors.size()) {
+            throw new IllegalArgumentException("Invalid floor in ticket");
         }
-
-        if(!v.getLicensePlate().equals(ticket.getLicensePlate())) {
-            throw new IllegalArgumentException("Ticket plate mismatch");
-        }
-
-        for (int idx : slots) slotToVehicle[idx] = null;
+        Floor f = floors.get(ticket.getFloor());
+        Vehicle v = f.release(ticket);
         parkedPlates.remove(v.getLicensePlate());
         return v;
     }
 
-    public int getCapacity() {
-        return capacity;
+    public int floorsCount() {
+        return floors.size();
     }
 
-    public int getAvailableUnits() {
-        int free = 0;
-        for(int i=1; i<=capacity; i++) {
-            if(slotToVehicle[i] == null) free++;
+    public void displayAvailableUnits(){
+        for(int i=0; i<floors.size(); i++) {
+            System.out.println(">> floor: " + i + " ---  available units: " + floors.get(i).getAvailableUnits());
         }
-        return free;
-    }
-
-
-    private Vehicle getAt(int idx) {
-        if(idx < 1 || idx > capacity) return null;
-        return slotToVehicle[idx];
-    }
-
-    private List<Integer> findContiguousFreeBlock(int size) {
-        int run = 0;
-        for(int i=1; i<=capacity; i++) {
-            if(slotToVehicle[i] == null) {
-                run++;
-                if(run == size) {
-                    int start = i - size + 1;
-                    List<Integer> block = new ArrayList<>(size);
-                    for(int s=start; s<=i; s++) {
-                        block.add(s);
-                    }
-                    return block;
-                }
-            } else {
-                run = 0;
-            }
-        }
-        return null;
     }
 }
 
@@ -157,12 +194,20 @@ final class Vehicle {
     }
 }
 
-class ParkingTicket{
+final class ParkingTicket{
+    private final int floor;
     private final List<Integer> slots;
     private final String licensePlate;
-    ParkingTicket(List<Integer> slots, String licensePlate) {
+    ParkingTicket(int floor, List<Integer> slots, String licensePlate) {
+        if(floor < 0) throw new IllegalArgumentException("floor must be >= 0");
+        if(slots == null || slots.isEmpty()) throw new IllegalArgumentException("slots required");
+        this.floor = floor;
         this.slots = List.copyOf(slots);
         this.licensePlate = licensePlate;
+    }
+
+    public int getFloor(){
+        return floor;
     }
 
     public List<Integer> getSlots() {
