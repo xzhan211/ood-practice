@@ -1,206 +1,157 @@
 import java.util.*;
-import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
-import java.util.stream.Collectors;
+
+
+
+/*
+ * R1: The system should store information about books and members, member can borrow and return a book
+ * 
+*/
+
+
+class Book {
+    private final String id;
+    private final String title;
+    private final String author;
+
+    private boolean available = true;
+    private String borrowedByMemberId = null;
+
+    public Book(String id, String title, String author) {
+        this.id = Objects.requireNonNull(id);
+        this.title = Objects.requireNonNull(title);
+        this.author = Objects.requireNonNull(author);
+    }
+
+    public String getId() { return id; }
+    public String getTitle() { return title; }
+    public String getAuthor() { return author; }
+
+    public boolean isAvailable() { return available; }
+    void setAvailable(boolean available) { this.available = available; } // package-private (default visibility), only classes inside the same package — like InMemoryLibrary — can call it
+
+    public Optional<String> getBorrowedBymemberId() { return Optional.ofNullable(borrowedByMemberId); }
+
+    void setBorrowedByMemberId(String memberId) { this.borrowedByMemberId = memberId; }
+
+    @Override 
+    public String toString() {
+        return "Book{" + id + ", '" + title + "' by " + author + ", available=" + available + "}";
+    }
+}
+
+class Member {
+    private final String id;
+    private final String name;
+    private final Set<String> borrowedBookIds = new HashSet<>();
+
+    public Member(String id, String name) {
+        this.id = Objects.requireNonNull(id);
+        this.name = Objects.requireNonNull(name);
+    }
+
+    public String getId() { return id; }
+    public String getName() {return name; }
+    public Set<String> getBorrowedBookIds() { return Collections.unmodifiableSet(borrowedBookIds); } // return a read-only set
+
+    void addBorrowed(String bookId) { borrowedBookIds.add(bookId); }
+    void removeBorrowed(String bookId) { borrowedBookIds.remove(bookId); }
+
+    @Override 
+    public String toString() {
+        return "Member{" + id + ", '" + name + "', borrowed=" + borrowedBookIds + "}";
+    }
+}
+
+interface Library {
+    void addBook(Book book);
+    void addMember(Member member);
+
+    void borrow(String bookId, String memberId);
+    void returnBook(String bookId, String memberId);
+
+    Optional<Book> getBook(String bookId);
+    Optional<Member> getMember(String memberId);
+}
+
+
+class InMemoryLibrary implements Library {
+    private final Map<String, Book> books = new HashMap<>();
+    private final Map<String, Member> members = new HashMap<>();
+
+    @Override 
+    public void addBook(Book book) {
+        if(books.putIfAbsent(book.getId(), book) != null) {
+            throw new IllegalArgumentException("Book id already exists: " + book.getId());
+        }
+    }
+
+    @Override
+    public void addMember(Member member) {
+        if(members.putIfAbsent(member.getId(), member) != null) {
+            throw new IllegalArgumentException("Member id already exists: " + member.getId());
+        }
+    }
+
+    @Override
+    public void borrow(String bookId, String memberId) {
+        Book book = books.get(bookId);
+        if(book == null) throw new NoSuchElementException("No such book: " + bookId);
+        Member member = members.get(memberId);
+        if(member == null) throw new NoSuchElementException("No such member: " + memberId);
+        if(!book.isAvailable()) throw new IllegalStateException("Book already borrowed: " + bookId);
+
+        book.setAvailable(false);
+        book.setBorrowedByMemberId(memberId);
+        member.addBorrowed(bookId);
+    }
+
+    @Override
+    public void returnBook(String bookId, String memberId) {
+        Book book = books.get(bookId);
+        if(book == null) throw new NoSuchElementException("No such book: " + bookId);
+        Member member = members.get(memberId);
+        if(member == null) throw new NoSuchElementException("No such member: " + memberId);
+
+        String holder = book.getBorrowedBymemberId().orElse(null);
+        if(holder == null) throw new IllegalStateException("Book is not borrowed: " + bookId);
+        if(!holder.equals(memberId)) throw new IllegalStateException("Book is helld by another member: " + holder);
+        
+        book.setAvailable(true);
+        book.setBorrowedByMemberId(null);
+        member.removeBorrowed(bookId);
+    }
+
+    @Override
+    public Optional<Book> getBook(String bookId) {
+        return Optional.ofNullable(books.get(bookId));
+    }
+
+    @Override
+    public Optional<Member> getMember(String memberId) {
+        return Optional.ofNullable(members.get(memberId));
+    }
+}
+
+
 
 public class LibrarySystem{
     public static void main(String[] args){
-        Library myLibrary = Library.getLibrary();
-        try{
-            myLibrary.addItem(1, new BookItem(1, "Cat book", "xyz", ItemType.BOOK));
-            myLibrary.addItem(2, new CDItem(2, "Lion king", "Disney", ItemType.CD));
-            myLibrary.addBorrow(1, 10);
-            myLibrary.addBorrow(2, 11);
-            myLibrary.addBorrow(1, 20);
-        } catch(Exception e){
-            System.out.println("exception handler : " + e.toString());
-        }
-        System.out.println(myLibrary.getOverDueItemId());
+        Library lib = new InMemoryLibrary();
+
+        lib.addBook(new Book("b1", "Clean Code", "Robert C. Martin"));
+        lib.addBook(new Book("b2", "Effective Java", "Joshua Bloch"));
+        lib.addMember(new Member("m1", "Alice"));
+        lib.addMember(new Member("m2", "Bob"));
+
+        lib.borrow("b1", "m1");
+        System.out.println(lib.getBook("b1").get());
+        System.out.println(lib.getMember("m1").get());
+
+        lib.returnBook("b1", "m1");
+        System.out.println(lib.getBook("b1").get());
+        System.out.println(lib.getMember("m1").get());
     }
 }
 
 
-/* table:
- * ---------
- * Books - sid, name, author
- * CDs - sid, name, publisher
- * eBooks - sid, name, author
- * Users - id, name, address, BOD
- * Borrows - id, userId, itemId
- * */
-
-
-/* API:
- * --------
- * post api/borrow?sid=xxx&userId=yyy
- * put api/return?sid=xxx
- * get api/over-due
- * post api/add?sid=xxx
- * */
-
-class DoubleBorrowException extends Exception{
-    public DoubleBorrowException(String message){
-        super(message);
-    }
-}
-
-class ItemNotFoundException extends Exception{
-    public ItemNotFoundException(String message){
-        super(message);
-    }
-}
-
-class RepeatAddException extends Exception{
-    public RepeatAddException(String message){
-        super(message);
-    }
-}
-
-
-
-class Library{
-    private static Library library = null;
-    private static final int OVERDUE_DAYS = 20;
-    private final Map<Integer, Borrow> borrowsBySid;
-    private final Map<Integer, LibraryItem> inventory;
-    private int nextBorrowId;
-    
-
-    private  Library(){
-        this.borrowsBySid = new HashMap<>();
-        this.inventory = new HashMap<>();
-        this.nextBorrowId = 1;
-    }
-   // Singleton pattern
-    public static Library getLibrary(){
-        if(library == null){
-            library = new Library();
-        }
-        return library;
-    }
-
-
-
-    public boolean addBorrow(int sid, int userId) throws Exception{
-        if(borrowsBySid.containsKey(sid)) throw new DoubleBorrowException(sid + " already borrowed.");
-        if(!inventory.containsKey(sid)) throw new ItemNotFoundException(sid + " not found.");
-        LocalDate today = LocalDate.now();;
-        borrowsBySid.put(sid, new Borrow(nextBorrowId++, userId, sid, today));
-        return true;
-    }
-
-    public boolean returnItem(int sid) throws ItemNotFoundException {
-        if(!inventory.containsKey(sid)) throw new ItemNotFoundException(sid + " not found.");
-        borrowsBySid.remove(sid);
-        return true;
-    }
-
-    public boolean addItem(int sid, LibraryItem item) throws RepeatAddException {
-        if(inventory.containsKey(sid)) throw new RepeatAddException(sid + " already existed.");
-        inventory.put(sid, item);
-        return true;
-    }
-
-    public List<Integer> getOverDueItemId(){
-        List<Integer> ans = new ArrayList<>();
-        LocalDate today = LocalDate.now();
-        //for(Map.Entry<Integer, Borrow> entry : borrows.entrySet()){
-        //    if(ChronoUnit.DAYS.between(entry.getValue().getStartDate(), today) < 20){
-        //        ans.add(entry.getKey());
-        //    }
-        //}
-        //return ans;
-
-        return borrowsBySid.entrySet().stream().filter(e -> ChronoUnit.DAYS.between(e.getValue().getStartDate(), today) < OVERDUE_DAYS)
-            .sorted((a, b) -> Long.compare(
-                    ChronoUnit.DAYS.between(b.getValue().getStartDate(), today),
-                    ChronoUnit.DAYS.between(a.getValue().getStartDate(), today)))
-            .map(Map.Entry::getKey).collect(Collectors.toList());
-    }
-}
-
-
-
-
-class Borrow{
-    private int id;
-    private int userId;
-    private int itemId;
-    private LocalDate startDate;
-    Borrow(int id, int userId, int itemId, LocalDate startDate) {
-        this.id = id;
-        this.userId = userId;
-        this.itemId = itemId;
-        this.startDate = startDate;
-    }
-
-    public LocalDate getStartDate(){
-        return startDate;
-    }
-}
-
-
-
-class User{
-    int id;
-    String name;
-    User(int id, String name){
-        this.id = id;
-        this.name = name;
-    }
-}
-
-
-enum ItemType{
-    BOOK,
-    EBOOK,
-    CD
-}
-
-
-abstract class LibraryItem{
-    protected int sid;
-    protected String name;
-    protected ItemType type;
-    public LibraryItem(int sid, String name, ItemType type) {
-        this.sid = sid;
-        this.name = name;
-        this.type = type;
-    }
-
-    public ItemType getType(){
-        return type;
-    }
-    
-    public int getSid(){
-        return sid;
-    }
-}
-
-
-final class BookItem extends LibraryItem{
-    private String author;
-    public BookItem(int sid, String name, String author, ItemType type){
-        super(sid, name, type);
-        this.author = author;
-    }
-    
-    @Override
-    public String toString(){
-        return "Book: " + sid + " -- " + name + " -- " + author;
-    }
-}
-
-final class CDItem extends LibraryItem{
-    private String publisher;
-    public CDItem(int sid, String name, String publisher, ItemType type){
-        super(sid, name, type);
-        this.publisher = publisher;
-    }
-
-    @Override 
-    public String toString(){
-        return "CD: " + sid + " -- " + name + " -- " + publisher; 
-    }
-}
   
