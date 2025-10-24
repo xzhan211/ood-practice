@@ -6,7 +6,8 @@ import java.util.*;
 /*
  * R1: The system should store information about books and members, member can borrow and return a book
  * R2: A book can have multiple copies; each physical copy is a distinct book item with a unique ID
- * R3: The system should support both book and CD items.
+ * R3: The system should support both book and CD items
+ * R4: The system should allow users to search for books by title, author
 */
 
 
@@ -125,6 +126,9 @@ interface Library {
     Optional<Member> getMember(String memberId);
     List<LibraryItem> listItemsByBook(String bookId);
     List<LibraryItem> listItemsByCD(String cdId);
+
+    List<Book> searchBooksByTitle(String query);
+    List<Book> searchBooksByAuthor(String query);
 
     void addMember(Member member);
 }
@@ -269,6 +273,39 @@ class InMemoryLibrary implements Library {
         }
         return list;
     }
+
+
+    @Override 
+    public List<Book> searchBooksByTitle(String query) {
+        String q = normalize(query);
+        List<Book> out = new ArrayList<>();
+        for (Book b : books.values()) {
+            if (containsIgnoreCase(b.getTitle(), q)) out.add(b);
+        }
+        return out;
+    }
+
+
+    @Override 
+    public List<Book> searchBooksByAuthor(String query) {
+        String q = normalize(query);
+        List<Book> out = new ArrayList<>();
+        for (Book b : books.values()) {
+            if (containsIgnoreCase(b.getAuthor(), q)) out.add(b);
+        }
+        return out;
+    }
+
+
+    private static String normalize(String s) {
+        if (s == null) return "";
+        return s.trim().toLowerCase(Locale.ROOT);
+    }
+    
+    private static boolean containsIgnoreCase(String haystack, String needleLower) {
+        if (needleLower.isEmpty()) return true; // treat empty as match-all (simple behavior)
+        return haystack != null && haystack.toLowerCase(Locale.ROOT).contains(needleLower);
+    }
 }
 
 
@@ -280,6 +317,7 @@ public class LibrarySystem{
 
         lib.addBook(new Book("b1", "Clean Code", "Robert C. Martin"));
         lib.addBook(new Book("b2", "Effective Java", "Joshua Bloch"));
+        lib.addBook(new Book("b3", "Clean Architecture", "Robert C. Martin"));
         lib.addCD(new CD("c1", "Random Access Memories", "Daft Punk"));
 
 
@@ -308,6 +346,10 @@ public class LibrarySystem{
         System.out.println("Alice after returnCopy: " + lib.getMember("m1").get());
         lib.returnCopy("c1-i2", "m2");
         System.out.println("Bob after returnByCDId: " + lib.getMember("m2").get());
+
+        // --- Search demos ---
+        System.out.println("Search by title 'clean': " + lib.searchBooksByTitle("clean"));
+        System.out.println("Search by author 'bloch': " + lib.searchBooksByAuthor("bloch"));
     }
 }
 
