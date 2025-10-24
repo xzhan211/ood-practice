@@ -6,7 +6,7 @@ import java.util.*;
 /*
  * R1: The system should store information about books and members, member can borrow and return a book
  * R2: A book can have multiple copies; each physical copy is a distinct book item with a unique ID
- * 
+ * R3: The system should support both book and CD items.
 */
 
 
@@ -31,20 +31,45 @@ class Book {
     }
 }
 
-class BookItem {
+class CD {
+    private final String id;
+    private final String title;
+    private final String artist;
+
+    public CD(String id, String title, String artist) {
+        this.id = Objects.requireNonNull(id);
+        this.title = Objects.requireNonNull(title);
+        this.artist = Objects.requireNonNull(artist);
+    }
+
+    public String getId() { return id; }
+    public String getTitle() { return title; }
+    public String getArtist() { return artist; }
+    @Override
+    public String toString() {
+        return "CD{" + id + ", '" + title + "' by " + artist + "}";
+    }
+}
+
+enum MediaType { BOOK, CD }
+
+class LibraryItem {
     private final String itemId;
-    private final String bookId;
+    private final MediaType type;
+    private final String logicalId;
 
     private boolean available = true;
     private String borrowedByMemberId = null;
 
-    public BookItem(String itemId, String bookId) {
+    public LibraryItem(String itemId, MediaType type, String logicalId) {
         this.itemId = Objects.requireNonNull(itemId);
-        this.bookId = Objects.requireNonNull(bookId);
+        this.type = Objects.requireNonNull(type);
+        this.logicalId = Objects.requireNonNull(logicalId);
     }
 
     public String getItemId() { return itemId; }
-    public String getBookId() { return bookId; }
+    public MediaType getType() { return type; }
+    public String getLogicalId() { return logicalId; }
 
     public boolean isAvailable() { return available; }
     void setAvailable(boolean available) { this.available = available; }
@@ -52,11 +77,11 @@ class BookItem {
     public Optional<String> getBorrowedByMemberId() { return Optional.ofNullable(borrowedByMemberId); }
     void setBorrowedByMemberId(String memberId) { this.borrowedByMemberId = memberId; }
 
-    @Override
-    public String toString() {
-        return "BookItem{" + itemId + ", bookId=" + bookId + ", available=" + available + ", memberId=" + borrowedByMemberId + "}";
+    @Override public String toString() {
+        return "Item{" + itemId + ", type=" + type + ", logicalId=" + logicalId + ", available=" + available + "}";
     }
 }
+
 
 class Member {
     private final String id;
@@ -77,34 +102,42 @@ class Member {
 
     @Override 
     public String toString() {
-        return "Member{" + id + ", '" + name + "', borrowed=" + borrowedItemIds + "}";
+        return "Member{" + id + ", '" + name + "', borrowedItems=" + borrowedItemIds + "}";
     }
 }
 
 interface Library {
     void addBook(Book book);
-    void addCopy(String bookId, String itemId);
+    void addCD(CD cd);
+
+    void addBookCopy(String bookId, String itemId);
+    void addCDCopy(String cdId, String itemId);
 
     void borrowCopy(String itemId, String memberId);
     void returnCopy(String itemId, String memberId);
 
-    default void borrow(String bookId, String memberId) { borrowAny(bookId, memberId); }
-    void borrowAny(String bookId, String memberId);
-
-    default void returnBook(String bookId, String memberId) { returnByBookId(bookId, memberId); }
-    void returnByBookId(String bookId, String memberId);
+    void borrowAnyBook(String bookId, String memberId);
+    void borrowAnyCD(String cdId, String memberId);
 
     Optional<Book> getBook(String bookId);
-    Optional<BookItem> getItem(String itemId);
+    Optional<CD> getCD(String cdId);
+    Optional<LibraryItem> getItem(String itemId);
     Optional<Member> getMember(String memberId);
-    List<BookItem> listItemsByBook(String bookId);
+    List<LibraryItem> listItemsByBook(String bookId);
+    List<LibraryItem> listItemsByCD(String cdId);
+
+    void addMember(Member member);
 }
 
 
 class InMemoryLibrary implements Library {
     private final Map<String, Book> books = new HashMap<>();
-    private final Map<String, BookItem> items = new HashMap<>();
-    private final Map<String, Set<String>> itemsByBookId = new HashMap<>();
+    private final Map<String, CD> cds = new HashMap<>();
+
+    private final Map<String, LibraryItem> items = new HashMap<>();
+    private final Map<String, Set<String>> itemIdsByBookId = new HashMap<>();
+    private final Map<String, Set<String>> itemIdsByCdId = new HashMap<>();
+
     private final Map<String, Member> members = new HashMap<>();
 
     @Override 
@@ -112,31 +145,46 @@ class InMemoryLibrary implements Library {
         if(books.putIfAbsent(book.getId(), book) != null) {
             throw new IllegalArgumentException("Book id already exists: " + book.getId());
         }
-        itemsByBookId.putIfAbsent(book.getId(), new HashSet<>());
+        itemIdsByBookId.putIfAbsent(book.getId(), new HashSet<>());
     }
 
     @Override
-    public void addCopy(String bookId, String itemId) {
-        Book b = books.get(bookId);
-        if(b == null) throw new NoSuchElementException("No such book: " + bookId);
-        if(items.putIfAbsent(itemId, new BookItem(itemId, bookId)) != null) {
-            throw new IllegalArgumentException("Item id already exists: " + itemId);
+    public void addCD(CD cd) {
+        if(cds.putIfAbsent(cd.getId(), cd) != null) {
+            throw new IllegalArgumentException("CD id already exists: " + cd.getId());
         }
-        // itemsByBookId.computeIfAbsent(bookId, k -> new HashSet<>()).add(itemId);
-        itemsByBookId.putIfAbsent(bookId, new HashSet<>());
-        itemsByBookId.get(bookId).add(itemId);
+        itemIdsByCdId.putIfAbsent(cd.getId(), new HashSet<>());
     }
 
-    
+    @Override 
+    public void addBookCopy(String bookId, String itemId) {
+        if (!books.containsKey(bookId)) throw new NoSuchElementException("No such book: " + bookId);
+        putNewItem(new LibraryItem(itemId, MediaType.BOOK, bookId));
+        itemIdsByBookId.computeIfAbsent(bookId, k -> new HashSet<>()).add(itemId);
+    }
+
+
+    @Override 
+    public void addCDCopy(String cdId, String itemId) {
+        if (!cds.containsKey(cdId)) throw new NoSuchElementException("No such CD: " + cdId);
+        putNewItem(new LibraryItem(itemId, MediaType.CD, cdId));
+        itemIdsByCdId.computeIfAbsent(cdId, k -> new HashSet<>()).add(itemId);
+    }
+
+    private void putNewItem(LibraryItem newItem) {
+        if (items.putIfAbsent(newItem.getItemId(), newItem) != null)
+            throw new IllegalArgumentException("Item id exists: " + newItem.getItemId());
+    }
+
+    @Override 
     public void addMember(Member member) {
-        if(members.putIfAbsent(member.getId(), member) != null) {
-            throw new IllegalArgumentException("Member id already exists: " + member.getId());
-        }
+        if (members.putIfAbsent(member.getId(), member) != null)
+        throw new IllegalArgumentException("Member id exists: " + member.getId());
     }
 
     @Override 
     public void borrowCopy(String itemId, String memberId) {
-        BookItem item = items.get(itemId);
+        LibraryItem item = items.get(itemId);
         if(item == null) throw new NoSuchElementException("No such item: " + itemId);
         Member member = members.get(memberId);
         if(member == null) throw new NoSuchElementException("No such member: " + memberId);
@@ -149,7 +197,7 @@ class InMemoryLibrary implements Library {
 
     @Override
     public void returnCopy(String itemId, String memberId) {
-        BookItem item = items.get(itemId);
+        LibraryItem item = items.get(itemId);
         if(item == null) throw new NoSuchElementException("No such item: " + itemId);
         Member member = members.get(memberId);
         if(member == null) throw new NoSuchElementException("No such member: " + memberId);
@@ -164,53 +212,63 @@ class InMemoryLibrary implements Library {
     }
 
     @Override 
-    public void borrowAny(String bookId, String memberId) {
-        Set<String> itemIds = itemsByBookId.get(bookId);
-        if(itemIds == null || itemIds.isEmpty()) throw new NoSuchElementException("No copies for book: " + bookId);
-        for(String iid : itemIds) {
-            BookItem it = items.get(iid);
-            if(it.isAvailable()) {
-                borrowCopy(iid, memberId);
-                return;
-            }
+    public void borrowAnyBook(String bookId, String memberId) {
+        Set<String> ids = itemIdsByBookId.get(bookId);
+        if (ids == null || ids.isEmpty()) throw new NoSuchElementException("No copies for book: " + bookId);
+        for (String iid : ids) {
+            LibraryItem it = items.get(iid);
+            if (it != null && it.isAvailable()) { borrowCopy(iid, memberId); return; }
         }
         throw new IllegalStateException("No available copies for book: " + bookId);
     }
 
-    @Override
-    public void returnByBookId(String bookId, String memberId) {
-        Member member = members.get(memberId);
-        if(member == null) throw new NoSuchElementException("No such member: " + memberId);
-        List<String> mine = new ArrayList<>();
-        for(String iid : member.getBorrowedItemIds()) {
-            BookItem it = items.get(iid);
-            if(it != null && it.getBookId().equals(bookId)) mine.add(iid);
+
+    @Override 
+    public void borrowAnyCD(String cdId, String memberId) {
+        Set<String> ids = itemIdsByCdId.get(cdId);
+        if (ids == null || ids.isEmpty()) throw new NoSuchElementException("No copies for CD: " + cdId);
+        for (String iid : ids) {
+            LibraryItem it = items.get(iid);
+            if (it != null && it.isAvailable()) { borrowCopy(iid, memberId); return; }
         }
-        if (mine.isEmpty()) throw new IllegalStateException("Member has no borrowed copy of book: " + bookId);
-        if (mine.size() > 1) throw new IllegalStateException("Ambiguous: member borrowed multiple copies of book: " + bookId + ". Use returnCopy(itemId, memberId).");
-        returnCopy(mine.get(0), memberId);
+        throw new IllegalStateException("No available copies for CD: " + cdId);
     }
+
 
     @Override 
     public Optional<Book> getBook(String bookId) { return Optional.ofNullable(books.get(bookId)); }
 
+    @Override
+    public Optional<CD> getCD(String cdId) { return Optional.ofNullable(cds.get(cdId)); }
+
     @Override 
-    public Optional<BookItem> getItem(String itemId) { return Optional.ofNullable(items.get(itemId)); }
+    public Optional<LibraryItem> getItem(String itemId) { return Optional.ofNullable(items.get(itemId)); }
 
     @Override 
     public Optional<Member> getMember(String memberId) { return Optional.ofNullable(members.get(memberId)); }
 
 
     @Override 
-    public List<BookItem> listItemsByBook(String bookId) {
-        Set<String> ids = itemsByBookId.getOrDefault(bookId, Collections.emptySet());
-        List<BookItem> list = new ArrayList<>(ids.size());
+    public List<LibraryItem> listItemsByBook(String bookId) {
+        Set<String> ids = itemIdsByBookId.getOrDefault(bookId, Collections.emptySet());
+        List<LibraryItem> list = new ArrayList<>(ids.size());
         for (String iid : ids) {
-            BookItem it = items.get(iid);
+            LibraryItem it = items.get(iid);
             if (it != null) list.add(it);
         }
         return list;
     }   
+
+    @Override 
+    public List<LibraryItem> listItemsByCD(String cdId) {
+        Set<String> ids = itemIdsByCdId.getOrDefault(cdId, Collections.emptySet());
+        List<LibraryItem> list = new ArrayList<>(ids.size());
+        for (String iid : ids) { 
+            LibraryItem it = items.get(iid); 
+            if (it != null) list.add(it); 
+        }
+        return list;
+    }
 }
 
 
@@ -218,34 +276,38 @@ class InMemoryLibrary implements Library {
 public class LibrarySystem{
     public static void main(String[] args){
         InMemoryLibrary lib = new InMemoryLibrary();
+
+
         lib.addBook(new Book("b1", "Clean Code", "Robert C. Martin"));
         lib.addBook(new Book("b2", "Effective Java", "Joshua Bloch"));
+        lib.addCD(new CD("c1", "Random Access Memories", "Daft Punk"));
+
+
         lib.addMember(new Member("m1", "Alice"));
         lib.addMember(new Member("m2", "Bob"));
 
 
-        // Add copies
-        lib.addCopy("b1", "b1-i1");
-        lib.addCopy("b1", "b1-i2");
-        lib.addCopy("b2", "b2-i1");
+        lib.addBookCopy("b1", "b1-i1");
+        lib.addBookCopy("b1", "b1-i2");
+        lib.addBookCopy("b2", "b2-i1");
+        lib.addCDCopy("c1", "c1-i1");
+        lib.addCDCopy("c1", "c1-i2");
 
 
-        // Borrow any available copy of b1 for Alice
-        lib.borrowAny("b1", "m1");
-        System.out.println("Alice after borrowAny(b1): " + lib.getMember("m1").get());
+        // Borrow any book copy of b1 for Alice
+        lib.borrowAnyBook("b1", "m1");
+        System.out.println("Alice after borrowAnyBook(b1): " + lib.getMember("m1").get());
 
-        // Bob borrows a specific copy of b1 (remaining one)
-        lib.borrowCopy("b1-i1", "m2");
-        System.out.println("Bob after borrowCopy(b1-i2): " + lib.getMember("m2").get());
+        // Bob borrows a specific CD copy
+        lib.borrowCopy("c1-i2", "m2");
+        System.out.println("Bob after borrowCopy(c1-i2): " + lib.getMember("m2").get());
 
         // Return by itemId for Alice
         String aliceItemId = lib.getMember("m1").get().getBorrowedItemIds().iterator().next();
         lib.returnCopy(aliceItemId, "m1");
         System.out.println("Alice after returnCopy: " + lib.getMember("m1").get());
-
-        // Attempt ambiguous return by bookId for Bob (will work since he has only one copy)
-        lib.returnByBookId("b1", "m2");
-        System.out.println("Bob after returnByBookId: " + lib.getMember("m2").get());
+        lib.returnCopy("c1-i2", "m2");
+        System.out.println("Bob after returnByCDId: " + lib.getMember("m2").get());
     }
 }
 
