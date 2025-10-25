@@ -25,6 +25,7 @@ public class RateLimiterFixedWindow implements RateLimiter {
     public boolean allow(String key) {
         final long now = System.currentTimeMillis();
         final long winStart = now - (now % windowMs);
+        System.out.println("now: " + now + "  winStart: " + winStart);
 
         // Atomic per-key update using compute
         final boolean[] allowed = new boolean[1];
@@ -43,7 +44,28 @@ public class RateLimiterFixedWindow implements RateLimiter {
                 }
             }
         });
+
         return allowed[0];
+
+
+        // not thread-safe
+        // if(!buckets.containsKey(key)) {
+        //     buckets.put(key, new Window(winStart, 1));
+        //     return true;
+        // }else{
+        //     Window cur = buckets.get(key);
+        //     if(cur.startMs != winStart) {
+        //         buckets.put(key, new Window(winStart, 1));
+        //         return true;
+        //     }else{
+        //         if(cur.count + 1 <= limit) {
+        //             buckets.put(key, new Window(winStart, cur.count + 1));
+        //             return true;
+        //         }else{
+        //             return false;
+        //         }
+        //     }
+        // }
     }
 
     // small demo
