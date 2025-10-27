@@ -4,7 +4,7 @@ import java.util.*;
  * R1: The vending machine stores and manages different types of products, each placed at a unique slot within the machine.
  * R2: The vending machine can be in one of these three states: NoMoneyInsertedState, MoneyInsertedState, DispenseState
  * R3: Enable quantity per slot
- * R4: Handle price & balance & change <-- next
+ * R4: Handle price & balance & change
  * 
 */
 
@@ -22,23 +22,20 @@ final class Product {
     public String getSku() { return sku; }
     public String getName() { return name; }
     @Override
-    public String toString() {
-        return name + " [" + sku + "]";
-    }
+    public String toString() { return name + " [" + sku + "]"; }
 }
 
 final class Slot {
     private final String id;
     private Product product;
     private int quantity = 0;
+    private int priceCents = 0; // R4: per-slot price
 
     public Slot(String id) { this.id = Objects.requireNonNull(id); }
 
     public String getId() { return id; }
     public Optional<Product> getProduct() { return Optional.ofNullable(product); }
     void setProduct(Product product) { this.product = Objects.requireNonNull(product); }
-
-    // -- R3 helpers --
     public int getQuantity() { return quantity; }
     public boolean hasStock() { return quantity > 0; }
     public void restock(int delta) {
@@ -49,13 +46,20 @@ final class Slot {
         if(quantity <- 0) throw new IllegalStateException("Out of stock");
         quantity--;
     }
+
+    // R4: price
+    public int getPriceCents() { return priceCents; }
+    public void setPriceCents(int priceCents) {
+        if(priceCents < 0) throw new IllegalArgumentException("Price must be >= 0");
+        this.priceCents = priceCents;
+    }
 }
 
 // ----- R2: Add State Pattern -----
 
 interface State {
     void onEnter();
-    void insertMoney();
+    void insertMoney(int cents);
     void selectSlot(String slotId);
     void dispense();
     void cancel();
@@ -67,8 +71,13 @@ final class NoMoneyInsertedState implements State {
     NoMoneyInsertedState(VendingMachine vm) { this.vm = vm; }
 
     @Override public void onEnter() { System.out.println("[State] NoMoneyInserted"); }
-    @Override public void insertMoney() {
-        System.out.println("Money inserted.");
+    @Override public void insertMoney(int cents) {
+        if(cents <= 0) {
+            System.out.println("Insert a positive amount.");
+            return;
+        }
+        vm.addBalance(cents);
+        System.out.println("Money inserted: " + VendingMachine.fmt(cents) + " | Balance: " + VendingMachine.fmt(vm.getBalance()));
         vm.setState(vm.moneyInsertedState);
     }
     @Override public void selectSlot(String slotId) {
@@ -83,12 +92,24 @@ final class MoneyInsertedState implements State {
     private final VendingMachine vm;
     MoneyInsertedState(VendingMachine vm) { this.vm = vm; }
 
-    @Override public void onEnter() { System.out.println("[State] MoneyInserted"); }
-    @Override public void insertMoney() { System.out.println("Money already inserted."); }
-    @Override public void selectSlot(String slotId) {
-        // R3: must have a product AND stock > 0
+    @Override 
+    public void onEnter() { System.out.println("[State] MoneyInserted"); }
+    
+    @Override 
+    public void insertMoney(int cents) {
+        if(cents <= 0) { 
+            System.out.println("Insert a positive amount.");
+            return;
+        }
+        vm.addBalance(cents);
+        System.out.println("Money inserted: " + VendingMachine.fmt(cents) + " | Balance: " + VendingMachine.fmt(vm.getBalance()));
+    }
+
+    @Override 
+    public void selectSlot(String slotId) {
         try {
-            if (vm.peekProduct(slotId).isEmpty()) {
+            Optional<Product> p = vm.peekProduct(slotId);
+            if(p.isEmpty()) {
                 System.out.println("Slot " + slotId + " is empty (no product assigned).");
                 return;
             } 
@@ -96,7 +117,15 @@ final class MoneyInsertedState implements State {
                 System.out.println("Slot " + slotId + " is out of stock.");
                 return;
             }
-            System.out.println("Selected slot " + slotId + ". Preparing to dispense...");
+
+            int price = vm.getPriceCents(slotId);
+            if(vm.getBalance() < price) {
+                System.out.println("Insufficient balance for " + slotId + ". Price: " + 
+                    VendingMachine.fmt(price) + ", Balance: " + VendingMachine.fmt(vm.getBalance()));
+                return;
+            }
+
+            System.out.println("Selected slot " + slotId + " (Price " + VendingMachine.fmt(price) + ").");
             vm.setPendingSlot(slotId);
             vm.setState(vm.dispenseState);
         } catch (IllegalArgumentException e) {
@@ -105,7 +134,12 @@ final class MoneyInsertedState implements State {
     }
     @Override public void dispense() { System.out.println("Select a slot first."); }
     @Override public void cancel() {
-        System.out.println("Transaction canceled, returning money.");
+        if (vm.getBalance() > 0) {
+            System.out.println("Transaction canceled. Refunding " + VendingMachine.fmt(vm.getBalance()) + ":");
+            vm.returnChange(); // prints breakdown and zeroes balance
+        } else {
+            System.out.println("Transaction canceled.");
+        }
         vm.clearPendingSlot();
         vm.setState(vm.noMoneyInsertedState);
     }
@@ -117,7 +151,7 @@ final class DispenseState implements State {
     DispenseState(VendingMachine vm) { this.vm = vm; }
 
     @Override public void onEnter() { System.out.println("[State] Dispense"); }
-    @Override public void insertMoney() { System.out.println("Dispensing in progress..."); }
+    @Override public void insertMoney(int cents) { System.out.println("Dispensing in progress..."); }
     @Override public void selectSlot(String slotId) { System.out.println("Already dispensing."); }
     @Override public void dispense() {
         String slot = vm.getPendingSlot();
@@ -125,10 +159,17 @@ final class DispenseState implements State {
             System.out.println("No selection to dispense.");
         } else {
             try {
-                Product p = vm.vendOne(slot); // R3: decrement quantity
-                System.out.println("Dispensed 1 item from " + slot + " -> " + p);
+                int price = vm.getPriceCents(slot);
+                vm.deductBalance(price);
+                Product p = vm.vendOne(slot);
+                System.out.println("Dispensed 1 item from " + slot + " -> " + p + " | Charged " + VendingMachine.fmt(price));
+                if(vm.getBalance() > 0) {
+                    System.out.println("Returning change " + VendingMachine.fmt(vm.getBalance()));
+                    vm.returnChange();
+                }
             } catch (IllegalStateException ex) {
                 System.out.println("Failed to dispense: " + ex.getMessage());
+                // call custom service
             }
         }
         vm.clearPendingSlot();
@@ -140,12 +181,11 @@ final class DispenseState implements State {
     @Override public String name() { return "DispenseState"; }
 }
 
-
 public class VendingMachine {
 
     private final Map<String, Slot> slots = new HashMap<>();
 
-    // R2: states (package-private for internal access by state impls)
+    // States
     final State noMoneyInsertedState = new NoMoneyInsertedState(this);
     final State moneyInsertedState  = new MoneyInsertedState(this);
     final State dispenseState       = new DispenseState(this);
@@ -153,6 +193,8 @@ public class VendingMachine {
 
     private State state = noMoneyInsertedState;
     private String pendingSlot;
+
+    private int balanceCents = 0;
 
     public VendingMachine() { state.onEnter(); }
 
@@ -165,8 +207,7 @@ public class VendingMachine {
     }
 
     public void placeProduct(String slotId, Product product) {
-        Slot slot = getSlotOrThrow(slotId);
-        slot.setProduct(product);
+        getSlotOrThrow(slotId).setProduct(product);
     }
  
     public Optional<Product> peekProduct(String slotId) {
@@ -179,7 +220,10 @@ public class VendingMachine {
         return s;
     }
 
-    /** Decrements stock and returns the product (used by DispenseState). */
+    // ---- R3 Inventory API ----
+    public void restock(String slotId, int qty) { getSlotOrThrow(slotId).restock(qty); }
+    public int getQuantity(String slotId) { return getSlotOrThrow(slotId).getQuantity(); }
+    public boolean hasStock(String slotId) { return getSlotOrThrow(slotId).hasStock(); }
     Product vendOne(String slotId) {
         Slot s = getSlotOrThrow(slotId);
         if(s.getProduct().isEmpty()) { throw new IllegalStateException("No product assigned"); }
@@ -187,10 +231,35 @@ public class VendingMachine {
         return s.getProduct().get();
     }
 
-    // ---- R3 Inventory API ----
-    public void restock(String slotId, int qty) { getSlotOrThrow(slotId).restock(qty); }
-    public int getQuantity(String slotId) { return getSlotOrThrow(slotId).getQuantity(); }
-    public boolean hasStock(String slotId) { return getSlotOrThrow(slotId).hasStock(); }
+    // ---- R4 Pricing & Balance API ----
+
+    public void setPriceCents(String soltId, int priceCents) { getSlotOrThrow(soltId).setPriceCents(priceCents); }
+    public int getPriceCents(String soltId) { return getSlotOrThrow(soltId).getPriceCents(); }
+    public void addBalance(int cents) { balanceCents += cents; }
+    public void deductBalance(int cents) {
+        if(cents < 0) throw new IllegalArgumentException("negative deduction");
+        if(balanceCents < cents) throw new IllegalStateException("Insufficient balance");
+        balanceCents -= cents;
+    }
+    public int getBalance() { return balanceCents; }
+
+    public void returnChange() {
+        int[] denoms = {100, 25, 10, 5, 1};
+        String[] labels = {"$1", "25c", "10c", "5c", "1c"};
+        int remaining = balanceCents;
+        for(int i=0; i<denoms.length; i++) {
+            int count = remaining / denoms[i];
+            if(count > 0) {
+                System.out.println(" " + labels[i] + " x " + count);
+                remaining -= count * denoms[i];
+            }
+        }
+        balanceCents = 0;
+    }
+
+    public static String fmt(int cents) {
+        return String.format("$%.2f", cents / 100.0);
+    }
 
     public void printLayout() {
         System.out.println("=== Vending layout ===");
@@ -204,7 +273,7 @@ public class VendingMachine {
     }
 
     // ---- R2 delegating API to current state ----
-    public void insertMoney()       { state.insertMoney(); }
+    public void insertMoney(int cents)       { state.insertMoney(cents); }
     public void selectSlot(String id){ state.selectSlot(id); }
     public void dispense()          { state.dispense(); }
     public void cancel()            { state.cancel(); }
@@ -227,48 +296,35 @@ public class VendingMachine {
         vm.addSlot("A2");
         vm.placeProduct("A1", new Product("COKE-355", "Coca-Cola 355ml"));
         vm.placeProduct("A2", new Product("CHIPS-001", "Potato Chips"));
-       
-        // R3: restock quantities
-        vm.restock("A1", 2);  // A1 has 2 cokes
-        vm.restock("A2", 1);  // A2 has 1 chips
+        vm.setPriceCents("A1", 175); // $1.75
+        vm.setPriceCents("A2", 125); // $1.25
+        vm.restock("A1", 2);
+        vm.restock("A2", 1);
         vm.printLayout();
 
-        // Vend #1 from A1
-        vm.insertMoney();
-        vm.selectSlot("A1");  // ok (has stock)
-        vm.dispense();        // qty A1 becomes 1
+        // Case 1: Underpay then top up, buy A1, get change
+        vm.insertMoney(100);                 // $1.00
+        vm.selectSlot("A1");                 // insufficient, price $1.75
+        vm.insertMoney(100);                 // add $1.00 (balance $2.00)
+        vm.selectSlot("A1");                 // ok, to Dispense
+        vm.dispense();                       // charge $1.75, return $0.25 change
         vm.printLayout();
 
-        // Vend #2 from A1 (now becomes 0)
-        vm.insertMoney();
-        vm.selectSlot("A1");
-        vm.dispense();
-        vm.printLayout();
-
-        // Try vend from A1 again (out of stock)
-        vm.insertMoney();
-        vm.selectSlot("A1");  // Should report OUT OF STOCK
-        vm.cancel();
-
-        // Vend from A2 (has 1)
-        vm.insertMoney();
+        // Case 2: Exact pay and buy A2 (no change)
+        vm.insertMoney(125);                 // $1.25
         vm.selectSlot("A2");
-        vm.dispense();
+        vm.dispense();                       // exact, no change
         vm.printLayout();
 
-        // Try dispensing without selecting (edge case)
-        vm.insertMoney();
-        vm.dispense(); // "No selection to dispense." then back to NoMoneyInserted
+        // Case 3: Insert money but cancel (refund)
+        vm.insertMoney(200);                 // $2.00
+        vm.cancel();                         // refund $2.00
+        vm.printLayout();
 
-
-        // Another run including cancel
-        vm.insertMoney();
-        vm.cancel();                   // back to NoMoneyInserted
-
-        // Invalid slot path
-        vm.insertMoney();
-        vm.selectSlot("Z9");           // unknown slot
-        vm.cancel();
+        // Case 4: Try to buy out-of-stock
+        vm.insertMoney(200);
+        vm.selectSlot("A2");                 // out of stock
+        vm.cancel();                         // refund remaining
     }
 }
 
