@@ -1,4 +1,5 @@
 import java.util.*;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class EventProcessor {
     private static final long WINDOW_MS = 60_000;
@@ -6,6 +7,7 @@ public class EventProcessor {
     private static final int BUCKET_COUNT = (int) (WINDOW_MS / BUCKET_MS);
 
     static class Bucket {
+        final ReentrantLock lock = new ReentrantLock();
         long slot = -1;
         long sumLen = 0;
         long count = 0;
@@ -30,6 +32,8 @@ public class EventProcessor {
     }
 
     private final Bucket[] buckets = new Bucket[BUCKET_COUNT];
+
+    private final ReentrantLock globalLock = new ReentrantLock();
     private long maxTimestampSeen = Long.MIN_VALUE;
     private long windowSumLen = 0;
     private long windowCount = 0;
@@ -41,46 +45,57 @@ public class EventProcessor {
     }
 
     public void process(Event e) {
-        if(!isValidChecksum(e)) return;
 
-        if(maxTimestampSeen == Long.MIN_VALUE) {
-            maxTimestampSeen = e.timestamp;
-        }
+        globalLock.lock();
+        try {
+            if(!isValidChecksum(e)) return;
 
-        if(e.timestamp > maxTimestampSeen) {
-            advanceWindow(maxTimestampSeen, e.timestamp);
-            maxTimestampSeen = e.timestamp;
-        }
-
-        if(e.timestamp < maxTimestampSeen - WINDOW_MS) {
-            return;
-        }
-
-        long slot = e.timestamp / BUCKET_MS;
-        int idx = (int) (slot % BUCKET_COUNT);
-
-        Bucket b = buckets[idx];
-
-        if(b.slot != slot) {
-            if(b.slot != -1) {
-                windowSumLen -= b.sumLen;
-                windowCount -= b.count;
+            if(maxTimestampSeen == Long.MIN_VALUE) {
+                maxTimestampSeen = e.timestamp;
             }
-            b.slot = slot;
-            b.sumLen = 0;
-            b.count = 0;
+
+            if(e.timestamp > maxTimestampSeen) {
+                advanceWindow(maxTimestampSeen, e.timestamp);
+                maxTimestampSeen = e.timestamp;
+            }
+
+            if(e.timestamp < maxTimestampSeen - WINDOW_MS) {
+                return;
+            }
+
+            long slot = e.timestamp / BUCKET_MS;
+            int idx = (int) (slot % BUCKET_COUNT);
+
+            Bucket b = buckets[idx];
+
+            if(b.slot != slot) {
+                if(b.slot != -1) {
+                    windowSumLen -= b.sumLen;
+                    windowCount -= b.count;
+                }
+                b.slot = slot;
+                b.sumLen = 0;
+                b.count = 0;
+            }
+
+            int len = e.payload.length();
+            b.sumLen += len;
+            b.count += 1;
+
+            windowSumLen += len;
+            windowCount += 1;
+        } finally {
+            globalLock.unlock();
         }
-
-        int len = e.payload.length();
-        b.sumLen += len;
-        b.count += 1;
-
-        windowSumLen += len;
-        windowCount += 1;
     }
 
     public double getAveragePayloadLength() {
-        return windowCount == 0 ? 0.0 : (double) windowSumLen / windowCount;
+        globalLock.lock();
+        try {
+            return windowCount == 0 ? 0.0 : (double) windowSumLen / windowCount;
+        } finally {
+            globalLock.unlock();
+        }
     }
 
     private void advanceWindow(long oldMaxTs, long newMaxTs) {
@@ -98,12 +113,17 @@ public class EventProcessor {
 
         for (long slot = oldExpiredBefore + 1; slot <= newExpiredBefore; slot++) {
             int idx = (int) (slot % BUCKET_COUNT);
-            
             Bucket b = buckets[idx];
-            if(b.slot == slot) {
-                windowSumLen -= b.sumLen;
-                windowCount -= b.count;
-                b.clear();
+
+            b.lock.lock();
+            try {
+                if(b.slot == slot) {
+                    windowSumLen -= b.sumLen;
+                    windowCount -= b.count;
+                    b.clear();
+                }
+            } finally {
+                b.lock.unlock();
             }
         }
     }
