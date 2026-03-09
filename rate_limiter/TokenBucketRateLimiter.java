@@ -3,10 +3,10 @@ import java.util.concurrent.locks.ReentrantLock;
 public class TokenBucketRateLimiter {
 
     private final long capacity;
-    private final double refillRatePerNanos; // 每纳秒补充多少 token
+    private final long refillRatePerSecond;
 
-    private double tokens;
-    private long lastRefillTimeNanos;
+    private long tokens;
+    private long lastRefillTimeMs;
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -15,9 +15,9 @@ public class TokenBucketRateLimiter {
             throw new IllegalArgumentException("capacity and refillRatePerSecond must be > 0");
         }
         this.capacity = capacity;
-        this.refillRatePerNanos = (double) refillRatePerSecond / 1_000_000_000.0;
+        this.refillRatePerSecond = refillRatePerSecond;
         this.tokens = capacity; // 通常初始化为满桶，允许一开始突发
-        this.lastRefillTimeNanos = System.nanoTime();
+        this.lastRefillTimeMs = System.currentTimeMillis();
     }
 
     /**
@@ -54,21 +54,25 @@ public class TokenBucketRateLimiter {
      * 根据时间流逝补充 token，但不会超过 capacity
      */
     private void refill() {
-        long now = System.nanoTime();
-        long elapsed = now - lastRefillTimeNanos;
+        long now = System.currentTimeMillis();
+        // System.out.println("------ now: " + now + "   ----- lastRefillTimeMs: " + lastRefillTimeMs);
+        long elapsed = now - lastRefillTimeMs;
         if (elapsed <= 0) {
             return;
         }
 
-        double addedTokens = elapsed * refillRatePerNanos;
-        tokens = Math.min(capacity, tokens + addedTokens);
-        lastRefillTimeNanos = now;
+        long addedTokens = elapsed * refillRatePerSecond / 1000;
+        if(addedTokens > 0) {
+            tokens = Math.min(capacity, tokens + addedTokens);
+            lastRefillTimeMs = now;
+        }
+        // System.out.println("------ tokens: " + tokens + "   ----- lastRefillTimeMs: " + lastRefillTimeMs);
     }
 
     /**
      * 用于调试/观测
      */
-    public double getAvailableTokens() {
+    public long getAvailableTokens() {
         lock.lock();
         try {
             refill();
