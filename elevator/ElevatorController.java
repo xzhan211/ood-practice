@@ -3,23 +3,15 @@ import java.util.*;
 public class ElevatorController {
     
     private final List<Elevator> elevators;
+    private final DispatchStrategy strategy;
     
-    public ElevatorController(List<Elevator> elevators) {
+    public ElevatorController(List<Elevator> elevators, DispatchStrategy strategy) {
         this.elevators = elevators;
+        this.strategy = strategy;
     }
 
     public void submitHallRequest(HallRequest request) {
-        Elevator bestElevator = null;
-        int bestCost = Integer.MAX_VALUE;
-
-        for(Elevator elevator : elevators) {
-            int cost = elevator.estimateCost(request);
-            if(cost < bestCost) {
-                bestCost = cost;
-                bestElevator = elevator;
-            }
-        }
-
+        Elevator bestElevator = strategy.selectElevator(elevators, request);
         if(bestElevator != null) {
             bestElevator.addHallRequest(request);
         }
@@ -61,7 +53,9 @@ public class ElevatorController {
             new Elevator(3, 10)
         );
 
-        ElevatorController controller = new ElevatorController(elevators);
+        DispatchStrategy strategy = new DirectionAwareNearestStrategy();
+
+        ElevatorController controller = new ElevatorController(elevators, strategy);
 
         controller.submitHallRequest(new HallRequest(3, Direction.UP));
         controller.submitHallRequest(new HallRequest(8, Direction.DOWN));
@@ -76,6 +70,73 @@ public class ElevatorController {
         }
     }
 }
+
+interface DispatchStrategy {
+    Elevator selectElevator(List<Elevator> elevators, HallRequest request);
+}
+
+class DirectionAwareNearestStrategy implements DispatchStrategy {
+    @Override
+    public Elevator selectElevator(List<Elevator> elevators, HallRequest request) {
+        Elevator bestElevator = null;
+        int bestCost = Integer.MAX_VALUE;
+
+        for(Elevator elevator : elevators) {
+            int cost = estimateCost(elevator, request);
+            if(cost < bestCost) {
+                bestCost = cost;
+                bestElevator = elevator;
+            }
+        }
+        return bestElevator;
+    }
+
+    private int estimateCost(Elevator elevator, HallRequest request) {
+        int requestFloor = request.getFloor();
+
+        if(elevator.getState() == ElevatorState.OUT_OF_SERVICE) {
+            return Integer.MAX_VALUE;
+        }
+
+        if(elevator.getDirection() == Direction.IDLE) {
+            return Math.abs(requestFloor - elevator.getCurrentFloor());
+        }
+
+        if(elevator.getDirection() == request.getDirection()) {
+            if(elevator.getDirection() == Direction.UP && requestFloor >= elevator.getCurrentFloor()) {
+                return requestFloor - elevator.getCurrentFloor();
+            }
+            if(elevator.getDirection() == Direction.DOWN && requestFloor <= elevator.getCurrentFloor()) {
+                return elevator.getCurrentFloor() - requestFloor;
+            }
+        }
+        return Math.abs(elevator.getCurrentFloor() - requestFloor) + 1000;
+    }
+}
+
+class NearestElevatorStrategy implements DispatchStrategy {
+
+    @Override
+    public Elevator selectElevator(List<Elevator> elevators, HallRequest request) {
+        Elevator bestElevator = null;
+        int bestDistance = Integer.MAX_VALUE;
+
+        for (Elevator elevator : elevators) {
+            if (elevator.getState() == ElevatorState.OUT_OF_SERVICE) {
+                continue;
+            }
+
+            int distance = Math.abs(elevator.getCurrentFloor() - request.getFloor());
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestElevator = elevator;
+            }
+        }
+
+        return bestElevator;
+    }
+}
+
 
 enum Direction {
     UP, DOWN, IDLE
@@ -208,29 +269,6 @@ class Elevator {
         }else {
             direction = Direction.IDLE;
         }
-    }
-
-    public int estimateCost(HallRequest request) {
-        int requestFloor = request.getFloor();
-
-        if(state == ElevatorState.OUT_OF_SERVICE) {
-            return Integer.MAX_VALUE;
-        }
-
-        if(direction == Direction.IDLE) {
-            return Math.abs(requestFloor - currentFloor);
-        }
-
-        if(direction == request.getDirection()) {
-            if(direction == Direction.UP && requestFloor >= currentFloor) {
-                return requestFloor - currentFloor;
-            }
-            if(direction == Direction.DOWN && requestFloor <= currentFloor) {
-                return currentFloor - requestFloor;
-            }
-        }
-
-        return Math.abs(currentFloor - requestFloor) + 1000;
     }
 
     @Override 
